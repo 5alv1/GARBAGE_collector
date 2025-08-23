@@ -10,21 +10,18 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-typedef struct GCRegion GCRegion;
-typedef struct GCRef    GCRef;
-
-struct GCRegion {
+typedef struct GCRegion {
     void    *ptr;           // payload
     size_t   size;          // payload size
     size_t   strong_refs;   // number of live GCRef pointing here
     bool     logically_freed; // user requested free
-    GCRegion *next;         // intrusive list link
-};
+    struct GCRegion *next;         // intrusive list link
+} GCRegion;
 
-struct GCRef {
+typedef struct GCRef {
     GCRegion *region;       // target region
-    GCRef    *next;         // intrusive list link (for debugging/diagnostics)
-};
+    struct GCRef    *next;         // intrusive list link (for debugging/diagnostics)
+} GCRef;
 
 // GC global state (simple prototype)
 static struct {
@@ -33,15 +30,15 @@ static struct {
     size_t    region_count;
     size_t    ref_count;
     size_t    bytes_in_use; // sum of region->size that are not yet reclaimed
-} GC = {0};
+} GC = {nullptr};
 
 // ---------- Helpers ----------
 
 static GCRegion *gc_make_region(size_t size) {
     GCRegion *r = (GCRegion*)calloc(1, sizeof(GCRegion));
-    if (!r) return NULL;
+    if (!r) return nullptr;
     r->ptr = malloc(size);
-    if (!r->ptr) { free(r); return NULL; }
+    if (!r->ptr) { free(r); return nullptr; }
     r->size = size;
     r->strong_refs = 0;
     r->logically_freed = false;
