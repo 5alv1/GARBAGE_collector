@@ -181,9 +181,6 @@ void gc_collect(void) {
      * and when I encounter one that has no live reference, I unlink it
     */
 
-    gc_dump_stats(stdout);
-
-
     GCRegion *cur = GC.regions_head;
     GCRegion *next = nullptr;
     while (cur) {
