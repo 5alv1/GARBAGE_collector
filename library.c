@@ -4,30 +4,13 @@
 // Minimal lazy, reference-based "conservative" GC wrapper prototype.
 // Single-threaded; bounds-checked read/write; deferred reclamation via gc_collect().
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <stdint.h>
-
 int next_collect = 0;
 
 #define nullptr NULL
 
-void gc_collect(void);
 
-typedef struct GCRegion {
-    void    *ptr;           // payload
-    size_t   size;          // payload size
-    size_t   strong_refs;   // number of live GCRef pointing here
-    struct GCRegion *next;         // intrusive list link
-    struct GCRegion *prev;
-} GCRegion;
 
-typedef struct GCRef {
-    GCRegion *region;       // target region
-    struct GCRef    *next;         // intrusive list link (for debugging/diagnostics)
-    struct GCRef    *prev;
-} GCRef;
+
 
 // GC global state (simple prototype)
 static struct {
