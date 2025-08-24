@@ -6,12 +6,13 @@
 
 int next_collect = 0;
 
+// I do this because if I use NULL the IDE complains, and if I don't use it the compiler complains instead
 #define nullptr NULL
 
 // GC global state
 static struct {
     GCRegion *regions_head; // all regions ever allocated and not yet reclaimed
-    GCRef    *refs_head;    // all active references (optional; helps debug)
+    GCRef    *refs_head;    // all active references
     size_t    region_count;
     size_t    ref_count;
     size_t    bytes_in_use; // sum of region->size that are not yet reclaimed
@@ -26,10 +27,12 @@ static struct {
 // ---------- Helpers ----------
 
 static GCRegion *gc_make_region(size_t size) {
-    GCRegion *r = (GCRegion*)calloc(1, sizeof(GCRegion));
+    GCRegion *r = calloc(1, sizeof(GCRegion));
     if (!r) return nullptr;
     r->ptr = malloc(size);
     if (!r->ptr) { free(r); return nullptr; }
+
+    GC.bytes_in_use += size;
     r->size = size;
     r->strong_refs = 0;
 
@@ -42,6 +45,8 @@ static GCRegion *gc_make_region(size_t size) {
 
 static void gc_unlink_region(GCRegion *r) {
     free(r->ptr);
+    GC.bytes_in_use -= r->size;
+
     GCRegion *prev = r->prev;
     GCRegion *next = r->next;
 
@@ -93,14 +98,16 @@ GCRef* gc_new_ref(GCRef *ref) {
 }
 
 void gc_free(GCRef **ref_) {
-    if (!ref_ || !*ref_) return;
+    if (!ref_ || !*ref_) return; // Check against null values
+
     GCRef *ref = *ref_;
 
     ref->region->strong_refs--;
 
     gc_unlink_ref(ref);
-    *ref_ = nullptr;
+    *ref_ = nullptr; // Make the original variable zero (see docs for example)
 
+    // Every once in a while we do a little collection and reset the counter
     if (!next_collect) {
         gc_collect();
         next_collect = rand()%100;
@@ -108,17 +115,27 @@ void gc_free(GCRef **ref_) {
 }
 
 size_t gc_write(GCRef *ref, size_t offset, const char *src, size_t nbytes) {
-    if (!ref || !ref->region || !ref->region->ptr || !src) return 0;
+    if (!ref || !ref->region || !ref->region->ptr || !src) return 0; // Reference and region must be valid
     GCRegion *r = ref->region;
+
+    // Bounds checking
     if (offset + nbytes > r->size) return 0;
+
+    // Do the actual write operation
     memcpy((uint8_t*)r->ptr + offset, src, nbytes);
     return nbytes;
 }
 
 size_t gc_read(GCRef *ref, size_t offset, char *dst, size_t nbytes) {
+
+    // Check against null pointers
     if (!ref || !ref->region || !ref->region->ptr || !dst) return 0;
     GCRegion *r = ref->region;
+
+    // Bounds checking
     if (offset + nbytes > r->size) return 0;
+
+    // DO THE THING!
     memcpy(dst, (uint8_t*)r->ptr + offset, nbytes);
     return nbytes;
 }
