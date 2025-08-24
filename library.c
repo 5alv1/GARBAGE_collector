@@ -1,18 +1,14 @@
 #include "library.h"
 
 // gc_proto.c
-// Minimal lazy, reference-based "conservative" GC wrapper prototype.
+// Minimal lazy, reference-based conservative GC.
 // Single-threaded; bounds-checked read/write; deferred reclamation via gc_collect().
 
 int next_collect = 0;
 
 #define nullptr NULL
 
-
-
-
-
-// GC global state (simple prototype)
+// GC global state
 static struct {
     GCRegion *regions_head; // all regions ever allocated and not yet reclaimed
     GCRef    *refs_head;    // all active references (optional; helps debug)
@@ -36,14 +32,11 @@ static GCRegion *gc_make_region(size_t size) {
     if (!r->ptr) { free(r); return nullptr; }
     r->size = size;
     r->strong_refs = 0;
-    // r->logically_freed = false;
-    // push front
+
     r->next = GC.regions_head;
     if (GC.regions_head) GC.regions_head->prev = r;
 
     GC.regions_head = r;
-    // GC.region_count++;
-    // GC.bytes_in_use += size;
     return r;
 }
 
@@ -88,26 +81,17 @@ static void gc_unlink_ref(GCRef *ref) {
     free(ref);
 }
 
-// ---------- Public API ----------
-
-// Allocate a new memory region and return its first reference
 GCRef* gc_alloc(size_t size) {
     GCRegion *r = gc_make_region(size);
     if (!r) return nullptr;
     return gc_make_ref(r);
 }
 
-// Create a new (additional) reference to the same region
 GCRef* gc_new_ref(GCRef *ref) {
     if (!ref || !ref->region) return nullptr;
     return gc_make_ref(ref->region);
 }
 
-// Drop/destroy a reference you previously created
-
-
-// Logical free: mark the region as no longer needed by the owner of `ref`.
-// Actual memory is reclaimed lazily by gc_collect() when there are zero references.
 void gc_free(GCRef **ref_) {
     if (!ref_ || !*ref_) return;
     GCRef *ref = *ref_;
@@ -123,7 +107,6 @@ void gc_free(GCRef **ref_) {
     } else next_collect--;
 }
 
-// Bounds-checked write: returns bytes written (0 on error)
 size_t gc_write(GCRef *ref, size_t offset, const char *src, size_t nbytes) {
     if (!ref || !ref->region || !ref->region->ptr || !src) return 0;
     GCRegion *r = ref->region;
@@ -132,7 +115,6 @@ size_t gc_write(GCRef *ref, size_t offset, const char *src, size_t nbytes) {
     return nbytes;
 }
 
-// Bounds-checked read: returns bytes read (0 on error)
 size_t gc_read(GCRef *ref, size_t offset, char *dst, size_t nbytes) {
     if (!ref || !ref->region || !ref->region->ptr || !dst) return 0;
     GCRegion *r = ref->region;
@@ -141,13 +123,6 @@ size_t gc_read(GCRef *ref, size_t offset, char *dst, size_t nbytes) {
     return nbytes;
 }
 
-// Convenience accessors
-void*  gc_ptr(GCRef *ref)  { return (ref && ref->region) ? ref->region->ptr  : NULL; }
-size_t gc_size(GCRef *ref) { return (ref && ref->region) ? ref->region->size : 0;   }
-
-// Trigger lazy collection: any region with (strong_refs == 0) AND logically_freed is reclaimed.
-// If you want stricter behavior, set logically_freed by default and require explicit roots;
-// this prototype follows a ref-based approach to keep the API small.
 void gc_collect(void) {
     GCRegion *cur = GC.regions_head;
     GCRegion *next = nullptr;
@@ -160,7 +135,6 @@ void gc_collect(void) {
     }
 }
 
-// Optional diagnostics
 void gc_dump_stats(FILE *out) {
     if (!out) out = stderr;
     size_t regions = 0, live_refs = 0, pending = 0;
@@ -172,6 +146,7 @@ void gc_dump_stats(FILE *out) {
     fprintf(out, "[GC] regions=%zu, refs=%zu, bytes_in_use=%zu, reclaimable=%zu\n",
             regions, live_refs, GC.bytes_in_use, pending);
     fprintf(out, "[GC] Until next collect=%d\n", next_collect);
+    fflush(out);
 }
 
 // UNSAFE
@@ -181,7 +156,6 @@ void *to_raw(GCRef *ref) {
 }
 
 // ---------- Tiny usage example (compile with -DGC_PROTO_MAIN to run) ----------
-#define GC_PROTO_MAIN
 #ifdef GC_PROTO_MAIN
 int main(void) {
     setvbuf(stdout, nullptr, _IONBF, 0);
