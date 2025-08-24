@@ -14,13 +14,14 @@ typedef struct GCRegion {
     void    *ptr;           // payload
     size_t   size;          // payload size
     size_t   strong_refs;   // number of live GCRef pointing here
-    bool     logically_freed; // user requested free
     struct GCRegion *next;         // intrusive list link
+    struct GCRegion *prev;
 } GCRegion;
 
 typedef struct GCRef {
     GCRegion *region;       // target region
     struct GCRef    *next;         // intrusive list link (for debugging/diagnostics)
+    struct GCRef    *prev;
 } GCRef;
 
 // GC global state (simple prototype)
@@ -30,7 +31,13 @@ static struct {
     size_t    region_count;
     size_t    ref_count;
     size_t    bytes_in_use; // sum of region->size that are not yet reclaimed
-} GC = {nullptr};
+} GC = {
+    nullptr,
+    nullptr,
+    0,
+    0,
+    0
+};
 
 // ---------- Helpers ----------
 
@@ -41,38 +48,39 @@ static GCRegion *gc_make_region(size_t size) {
     if (!r->ptr) { free(r); return nullptr; }
     r->size = size;
     r->strong_refs = 0;
-    r->logically_freed = false;
+    // r->logically_freed = false;
     // push front
     r->next = GC.regions_head;
+    if (GC.regions_head) GC.regions_head->prev = r;
+
     GC.regions_head = r;
-    GC.region_count++;
-    GC.bytes_in_use += size;
+    // GC.region_count++;
+    // GC.bytes_in_use += size;
     return r;
 }
 
 static void gc_unlink_region(GCRegion *r) {
-    GCRegion **cur = &GC.regions_head;
-    while (*cur) {
-        if (*cur == r) {
-            *cur = r->next;
-            r->next = NULL;
-            GC.region_count--;
-            GC.bytes_in_use -= r->size;
-            free(r->ptr);
-            free(r);
-            return;
-        }
-        cur = &(*cur)->next;
-    }
+    free(r->ptr);
+    GCRegion *prev = r->prev;
+    GCRegion *next = r->next;
+
+    if (prev) {
+        prev->next = next;
+        next->prev = prev;
+    } else GC.regions_head = r->next;
+
+    free(r);
 }
 
 static GCRef *gc_make_ref(GCRegion *r) {
-    if (!r) return NULL;
+    if (!r) return nullptr;
     GCRef *ref = (GCRef*)calloc(1, sizeof(GCRef));
-    if (!ref) return NULL;
+    if (!ref) return nullptr;
     ref->region = r;
     // reference list (optional)
     ref->next = GC.refs_head;
+    GC.refs_head->prev = ref;
+
     GC.refs_head = ref;
     GC.ref_count++;
     r->strong_refs++;
@@ -80,21 +88,13 @@ static GCRef *gc_make_ref(GCRegion *r) {
 }
 
 static void gc_unlink_ref(GCRef *ref) {
-    // remove from ref list
-    GCRef **cur = &GC.refs_head;
-    while (*cur) {
-        if (*cur == ref) {
-            *cur = ref->next;
-            ref->next = NULL;
-            GC.ref_count--;
-            break;
-        }
-        cur = &(*cur)->next;
+    if (!ref) return;
+    if (!ref->prev) GC.refs_head = ref->next;
+    else {
+        ref->prev->next = ref->next;
+        ref->next->prev = ref->prev;
     }
-    if (ref->region) {
-        if (ref->region->strong_refs > 0) ref->region->strong_refs--;
-        ref->region = NULL;
-    }
+
     free(ref);
 }
 
@@ -103,30 +103,29 @@ static void gc_unlink_ref(GCRef *ref) {
 // Allocate a new memory region and return its first reference
 GCRef* gc_alloc(size_t size) {
     GCRegion *r = gc_make_region(size);
-    if (!r) return NULL;
+    if (!r) return nullptr;
     return gc_make_ref(r);
 }
 
 // Create a new (additional) reference to the same region
 GCRef* gc_new_ref(GCRef *ref) {
-    if (!ref || !ref->region) return NULL;
+    if (!ref || !ref->region) return nullptr;
     return gc_make_ref(ref->region);
 }
 
 // Drop/destroy a reference you previously created
-void gc_drop_ref(GCRef *ref) {
-    if (!ref) return;
-    gc_unlink_ref(ref);
-}
+
 
 // Logical free: mark the region as no longer needed by the owner of `ref`.
 // Actual memory is reclaimed lazily by gc_collect() when there are zero references.
-void gc_free(GCRef *ref) {
-    if (!ref || !ref->region) return;
-    ref->region->logically_freed = true;
-    // Note: we do NOT drop the caller's ref automatically—callers should
-    // typically `gc_drop_ref(ref)` after calling gc_free(ref) if they
-    // no longer want to hold the reference. Keeping it is allowed too.
+void gc_free(GCRef **ref_) {
+    if (!ref_ || !*ref_) return;
+    GCRef *ref = *ref_;
+
+    ref->region->strong_refs--;
+
+    gc_unlink_ref(ref);
+    *ref_ = nullptr;
 }
 
 // Bounds-checked write: returns bytes written (0 on error)
@@ -141,7 +140,7 @@ size_t gc_write(GCRef *ref, size_t offset, const void *src, size_t nbytes) {
 }
 
 // Bounds-checked read: returns bytes read (0 on error)
-size_t gc_read(GCRef *ref, size_t offset, void *dst, size_t nbytes) {
+size_t gc_read(GCRef *ref, size_t offset, char *dst, size_t nbytes) {
     if (!ref || !ref->region || !ref->region->ptr || !dst) return 0;
     GCRegion *r = ref->region;
     if (offset >= r->size) return 0;
@@ -160,10 +159,10 @@ size_t gc_size(GCRef *ref) { return (ref && ref->region) ? ref->region->size : 0
 // this prototype follows a ref-based approach to keep the API small.
 void gc_collect(void) {
     GCRegion *cur = GC.regions_head;
-    GCRegion *next = NULL;
+    GCRegion *next = nullptr;
     while (cur) {
         next = cur->next;
-        if (cur->logically_freed && cur->strong_refs == 0) {
+        if (cur->strong_refs == 0) {
             gc_unlink_region(cur);
         }
         cur = next;
@@ -176,24 +175,11 @@ void gc_dump_stats(FILE *out) {
     size_t regions = 0, live_refs = 0, pending = 0;
     for (GCRegion *r = GC.regions_head; r; r = r->next) {
         regions++;
-        if (r->logically_freed && r->strong_refs == 0) pending++;
+        if (r->strong_refs == 0) pending++;
     }
     for (GCRef *p = GC.refs_head; p; p = p->next) live_refs++;
     fprintf(out, "[GC] regions=%zu, refs=%zu, bytes_in_use=%zu, reclaimable=%zu\n",
             regions, live_refs, GC.bytes_in_use, pending);
-}
-
-// Cleanup everything (force-free all regions regardless of flags)
-// Call near program shutdown if desired.
-void gc_shutdown(void) {
-    // free all refs
-    while (GC.refs_head) {
-        gc_drop_ref(GC.refs_head);
-    }
-    // free all regions
-    while (GC.regions_head) {
-        gc_unlink_region(GC.regions_head);
-    }
 }
 
 // ---------- Tiny usage example (compile with -DGC_PROTO_MAIN to run) ----------
