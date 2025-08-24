@@ -25,20 +25,20 @@ static struct {
 };
 
 static GCRegion *gc_make_region(size_t size) {
-    GCRegion *r = calloc(1, sizeof(GCRegion));
-    if (!r) return nullptr;
-    r->ptr = malloc(size);
-    if (!r->ptr) { free(r); return nullptr; }
+    GCRegion *reg = calloc(1, sizeof(GCRegion));
+    if (!reg) return nullptr;
+    reg->ptr = calloc(1, size);
+    if (!reg->ptr) { free(reg); return nullptr; }
 
     GC.bytes_in_use += size;
-    r->size = size;
-    r->strong_refs = 0;
+    reg->size = size;
+    reg->strong_refs = 0;
 
-    r->next = GC.regions_head;
-    if (GC.regions_head) GC.regions_head->prev = r;
+    reg->next = GC.regions_head;
+    if (GC.regions_head) GC.regions_head->prev = reg;
 
-    GC.regions_head = r;
-    return r;
+    GC.regions_head = reg;
+    return reg;
 }
 
 static void gc_unlink_region(GCRegion *reg) {
@@ -52,24 +52,33 @@ static void gc_unlink_region(GCRegion *reg) {
      * No matter what case we're in, if the function does not return we are going to free the region
     */
 
+    if ((reg->prev && reg->prev->next != reg) || (reg->next && reg->next->prev != reg)) {
+        perror("Something went wrong while unlinking region");
+        exit(EXIT_FAILURE);
+    }
+
     if (!reg) return;
-    if (!reg->prev) GC.regions_head = reg->next;
+    if (!reg->prev) {
+        GC.regions_head = reg->next;
+        if (reg->next) reg->next->prev = nullptr;
+    }
     else if (!reg->next) reg->prev->next = nullptr;
     else {
         reg->prev->next = reg->next;
         reg->next->prev = reg->prev;
     }
 
+    GC.bytes_in_use -= reg->size;
     free(reg->ptr);
     free(reg);
 }
 
-static GCRef *gc_make_ref(GCRegion *r) {
+static GCRef *gc_make_ref(GCRegion *reg) {
     // ReSharper disable once CppDFAConstantConditions
-    if (!r) return nullptr;
+    if (!reg) return nullptr;
     GCRef *ref = calloc(1, sizeof(GCRef));
     if (!ref) return nullptr;
-    ref->region = r;
+    ref->region = reg;
 
     // We are putting our new reference on top of the list
     ref->next = GC.refs_head;
@@ -77,7 +86,7 @@ static GCRef *gc_make_ref(GCRegion *r) {
 
     GC.refs_head = ref;
     GC.ref_count++;
-    r->strong_refs++;
+    reg->strong_refs++;
     return ref;
 }
 
@@ -92,8 +101,16 @@ static void gc_unlink_ref(GCRef *ref) {
      * No matter what case we're in, if the function does not return we are going to free the reference
     */
 
+    if ((ref->prev && ref->prev->next != ref) || (ref->next && ref->next->prev != ref)) {
+        perror("Something went wrong while unlinking reference");
+        exit(EXIT_FAILURE);
+    }
+
     if (!ref) return;
-    if (!ref->prev) GC.refs_head = ref->next;
+    if (!ref->prev) {
+        GC.refs_head = ref->next;
+        if (ref->next) ref->next->prev = nullptr;
+    }
     else if (!ref->next) ref->prev->next = nullptr;
     else {
         ref->prev->next = ref->next;
@@ -127,7 +144,7 @@ void gc_free(GCRef **ref_) {
     // Every once in a while we do a little collection and reset the counter
     if (!next_collect) {
         gc_collect();
-        next_collect = rand()%100; // NOLINT(*-msc50-cpp)
+        next_collect = rand()%10 + 1; // NOLINT(*-msc50-cpp)
     } else next_collect--;
 }
 
@@ -164,12 +181,18 @@ void gc_collect(void) {
      * and when I encounter one that has no live reference, I unlink it
     */
 
+    gc_dump_stats(stdout);
+
+
     GCRegion *cur = GC.regions_head;
     GCRegion *next = nullptr;
     while (cur) {
         next = cur->next;
         if (cur->strong_refs == 0) {
             gc_unlink_region(cur);
+
+            cur = GC.regions_head;
+            continue;
         }
         cur = next;
     }
@@ -212,7 +235,6 @@ int main(void) {
 
     // create another reference
     GCRef *r2 = gc_new_ref(r);
-    GCRef *r3 = gc_new_ref(r2);
 
     // logical free by owner of r; keep r2 alive
     gc_free(&r);
@@ -227,7 +249,32 @@ int main(void) {
     gc_dump_stats(stdout);
 
     gc_dump_stats(stdout);
-    // gc_shutdown();         // safe to call even when clean
+
+    for (int i = 0; i < 6; i++) {
+        puts("-----------------");
+        GCRef *a = gc_alloc(16);
+        gc_free(&a);
+        gc_dump_stats(stdout);
+    }
+    puts("-----------------");
+
+    GCRef *a = gc_alloc(16);
+    GCRef *b = gc_new_ref(a);
+
+    gc_free(&a);
+    gc_dump_stats(stdout);
+
+    gc_free(&b);
+    gc_dump_stats(stdout);
+
+    puts("SEEMS GOOD TILL HERE");
+    for (int i = 0; i < 11; i++) {
+        puts("-----------------");
+        GCRef *a = gc_alloc(16);
+        gc_free(&a);
+        gc_dump_stats(stdout);
+    }
+    puts("-----------------");
     return 0;
 }
 #endif
