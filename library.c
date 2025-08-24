@@ -129,25 +129,21 @@ void gc_free(GCRef **ref_) {
 }
 
 // Bounds-checked write: returns bytes written (0 on error)
-size_t gc_write(GCRef *ref, size_t offset, const void *src, size_t nbytes) {
+size_t gc_write(GCRef *ref, size_t offset, const char *src, size_t nbytes) {
     if (!ref || !ref->region || !ref->region->ptr || !src) return 0;
     GCRegion *r = ref->region;
-    if (offset >= r->size) return 0;
-    size_t room = r->size - offset;
-    size_t to_copy = nbytes <= room ? nbytes : room;
-    memcpy((uint8_t*)r->ptr + offset, src, to_copy);
-    return to_copy;
+    if (offset + nbytes >= r->size) return 0;
+    memcpy((uint8_t*)r->ptr + offset, src, nbytes);
+    return nbytes;
 }
 
 // Bounds-checked read: returns bytes read (0 on error)
 size_t gc_read(GCRef *ref, size_t offset, char *dst, size_t nbytes) {
     if (!ref || !ref->region || !ref->region->ptr || !dst) return 0;
     GCRegion *r = ref->region;
-    if (offset >= r->size) return 0;
-    size_t room = r->size - offset;
-    size_t to_copy = nbytes <= room ? nbytes : room;
-    memcpy(dst, (uint8_t*)r->ptr + offset, to_copy);
-    return to_copy;
+    if (offset + nbytes >= r->size) return 0;
+    memcpy(dst, (uint8_t*)r->ptr + offset, nbytes);
+    return nbytes;
 }
 
 // Convenience accessors
