@@ -24,8 +24,6 @@ static struct {
     0
 };
 
-// ---------- Helpers ----------
-
 static GCRegion *gc_make_region(size_t size) {
     GCRegion *r = calloc(1, sizeof(GCRegion));
     if (!r) return nullptr;
@@ -43,28 +41,37 @@ static GCRegion *gc_make_region(size_t size) {
     return r;
 }
 
-static void gc_unlink_region(GCRegion *r) {
-    free(r->ptr);
-    GC.bytes_in_use -= r->size;
+static void gc_unlink_region(GCRegion *reg) {
+    /**
+     * Unlinking 101
+     * We're trying to unlink from a double linked list, we reason by cases:
+     * CASE 1: The node is NULL, return
+     * CASE 2: The node has no previous node, so it must be the head, substitute the head
+     * CASE 3: The node is not the head, so we attach our next node to our previous node
+     *
+     * No matter what case we're in, if the function does not return we are going to free the region
+    */
 
-    GCRegion *prev = r->prev;
-    GCRegion *next = r->next;
+    if (!reg) return;
+    if (!reg->prev) GC.regions_head = reg->next;
+    else if (!reg->next) reg->prev->next = nullptr;
+    else {
+        reg->prev->next = reg->next;
+        reg->next->prev = reg->prev;
+    }
 
-    if (prev && next) {
-        prev->next = next;
-        next->prev = prev;
-    } else if (!prev) GC.regions_head = r->next;
-    else prev->next = nullptr;
-
-    free(r);
+    free(reg->ptr);
+    free(reg);
 }
 
 static GCRef *gc_make_ref(GCRegion *r) {
+    // ReSharper disable once CppDFAConstantConditions
     if (!r) return nullptr;
-    GCRef *ref = (GCRef*)calloc(1, sizeof(GCRef));
+    GCRef *ref = calloc(1, sizeof(GCRef));
     if (!ref) return nullptr;
     ref->region = r;
-    // reference list (optional)
+
+    // We are putting our new reference on top of the list
     ref->next = GC.refs_head;
     if (GC.refs_head) GC.refs_head->prev = ref;
 
@@ -75,6 +82,16 @@ static GCRef *gc_make_ref(GCRegion *r) {
 }
 
 static void gc_unlink_ref(GCRef *ref) {
+    /**
+     * Unlinking 101
+     * We're trying to unlink from a double linked list, we reason by cases:
+     * CASE 1: The node is NULL, return
+     * CASE 2: The node has no previous node, so it must be the head, substitute the head
+     * CASE 3: The node is not the head, so we attach our next node to our previous node
+     *
+     * No matter what case we're in, if the function does not return we are going to free the reference
+    */
+
     if (!ref) return;
     if (!ref->prev) GC.refs_head = ref->next;
     else if (!ref->next) ref->prev->next = nullptr;
@@ -110,7 +127,7 @@ void gc_free(GCRef **ref_) {
     // Every once in a while we do a little collection and reset the counter
     if (!next_collect) {
         gc_collect();
-        next_collect = rand()%100;
+        next_collect = rand()%100; // NOLINT(*-msc50-cpp)
     } else next_collect--;
 }
 
@@ -141,6 +158,12 @@ size_t gc_read(GCRef *ref, size_t offset, char *dst, size_t nbytes) {
 }
 
 void gc_collect(void) {
+    /**
+     * I don't think this necessitates much discussion,
+     * what's happening is that I iterate through the regions
+     * and when I encounter one that has no live reference, I unlink it
+    */
+
     GCRegion *cur = GC.regions_head;
     GCRegion *next = nullptr;
     while (cur) {
