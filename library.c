@@ -8,9 +8,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
-#include <stdbool.h>
+
+int next_collect = 0;
 
 #define nullptr NULL
+
+void gc_collect(void);
 
 typedef struct GCRegion {
     void    *ptr;           // payload
@@ -130,13 +133,18 @@ void gc_free(GCRef **ref_) {
 
     gc_unlink_ref(ref);
     *ref_ = nullptr;
+
+    if (!next_collect) {
+        gc_collect();
+        next_collect = rand()%100;
+    } else next_collect--;
 }
 
 // Bounds-checked write: returns bytes written (0 on error)
 size_t gc_write(GCRef *ref, size_t offset, const char *src, size_t nbytes) {
     if (!ref || !ref->region || !ref->region->ptr || !src) return 0;
     GCRegion *r = ref->region;
-    if (offset + nbytes >= r->size) return 0;
+    if (offset + nbytes > r->size) return 0;
     memcpy((uint8_t*)r->ptr + offset, src, nbytes);
     return nbytes;
 }
@@ -145,7 +153,7 @@ size_t gc_write(GCRef *ref, size_t offset, const char *src, size_t nbytes) {
 size_t gc_read(GCRef *ref, size_t offset, char *dst, size_t nbytes) {
     if (!ref || !ref->region || !ref->region->ptr || !dst) return 0;
     GCRegion *r = ref->region;
-    if (offset + nbytes >= r->size) return 0;
+    if (offset + nbytes > r->size) return 0;
     memcpy(dst, (uint8_t*)r->ptr + offset, nbytes);
     return nbytes;
 }
@@ -180,6 +188,7 @@ void gc_dump_stats(FILE *out) {
     for (GCRef *p = GC.refs_head; p; p = p->next) live_refs++;
     fprintf(out, "[GC] regions=%zu, refs=%zu, bytes_in_use=%zu, reclaimable=%zu\n",
             regions, live_refs, GC.bytes_in_use, pending);
+    fprintf(out, "[GC] Until next collect=%d\n", next_collect);
 }
 
 // UNSAFE
@@ -201,11 +210,12 @@ int main(void) {
     printf("wrote %zu bytes\n", wrote);
 
     char buf[16] = {0};
-    size_t read = gc_read(r, 0, buf, sizeof(buf));
+    size_t read = gc_read(r, 0, buf, 16);
     printf("read %zu bytes: '%s'\n", read, buf);
 
     // create another reference
     GCRef *r2 = gc_new_ref(r);
+    GCRef *r3 = gc_new_ref(r2);
 
     // logical free by owner of r; keep r2 alive
     gc_free(&r);
@@ -219,7 +229,6 @@ int main(void) {
     gc_free(&r2);
     gc_dump_stats(stdout);
 
-    gc_collect();
     gc_dump_stats(stdout);
     // gc_shutdown();         // safe to call even when clean
     return 0;
