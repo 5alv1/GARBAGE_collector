@@ -10,6 +10,8 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+#define nullptr NULL
+
 typedef struct GCRegion {
     void    *ptr;           // payload
     size_t   size;          // payload size
@@ -64,10 +66,11 @@ static void gc_unlink_region(GCRegion *r) {
     GCRegion *prev = r->prev;
     GCRegion *next = r->next;
 
-    if (prev) {
+    if (prev && next) {
         prev->next = next;
         next->prev = prev;
-    } else GC.regions_head = r->next;
+    } else if (!prev) GC.regions_head = r->next;
+    else prev->next = nullptr;
 
     free(r);
 }
@@ -79,7 +82,7 @@ static GCRef *gc_make_ref(GCRegion *r) {
     ref->region = r;
     // reference list (optional)
     ref->next = GC.refs_head;
-    GC.refs_head->prev = ref;
+    if (GC.refs_head) GC.refs_head->prev = ref;
 
     GC.refs_head = ref;
     GC.ref_count++;
@@ -90,6 +93,7 @@ static GCRef *gc_make_ref(GCRegion *r) {
 static void gc_unlink_ref(GCRef *ref) {
     if (!ref) return;
     if (!ref->prev) GC.refs_head = ref->next;
+    else if (!ref->next) ref->prev->next = nullptr;
     else {
         ref->prev->next = ref->next;
         ref->next->prev = ref->prev;
@@ -178,9 +182,17 @@ void gc_dump_stats(FILE *out) {
             regions, live_refs, GC.bytes_in_use, pending);
 }
 
+// UNSAFE
+void *to_raw(GCRef *ref) {
+    if (!ref || !ref->region || !ref->region->ptr) return nullptr;
+    return ref->region->ptr;
+}
+
 // ---------- Tiny usage example (compile with -DGC_PROTO_MAIN to run) ----------
+#define GC_PROTO_MAIN
 #ifdef GC_PROTO_MAIN
 int main(void) {
+    setvbuf(stdout, nullptr, _IONBF, 0);
     GCRef *r = gc_alloc(16);
     if (!r) return 1;
 
@@ -196,16 +208,20 @@ int main(void) {
     GCRef *r2 = gc_new_ref(r);
 
     // logical free by owner of r; keep r2 alive
-    gc_free(r);
-    gc_drop_ref(r); // drop owner's handle
+    gc_free(&r);
+    // gc_drop_ref(r); // drop owner's handle
 
     gc_dump_stats(stdout); // not reclaimed yet; r2 still references it
 
-    gc_drop_ref(r2);       // now no references remain
+    // gc_drop_ref(r2);       // now no references remain
     gc_collect();          // lazy free happens here
 
+    gc_free(&r2);
     gc_dump_stats(stdout);
-    gc_shutdown();         // safe to call even when clean
+
+    gc_collect();
+    gc_dump_stats(stdout);
+    // gc_shutdown();         // safe to call even when clean
     return 0;
 }
 #endif
